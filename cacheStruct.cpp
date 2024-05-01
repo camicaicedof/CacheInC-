@@ -4,6 +4,7 @@
 #include <string>
 #include <algorithm>
 #include <queue>
+#include <fstream>
 
 using namespace std;
 
@@ -13,8 +14,15 @@ enum class State
 {
     Initialize,
     ReadAddress,
-    CHECKING_HIT,
-    REPLACING_BLOCK,
+    CheckHit,
+    CheckMemorySize,
+    ReadInstruction,
+    CheckCacheForDB,
+    ApplyLFU,
+    UpdateRam,
+    AddBlock,
+    ReturnCacheData,
+    UpdateBlock,
     PRINTING_RESULTS,
     FINISHED
 };
@@ -27,7 +35,48 @@ struct Block
     int leftLimit;
     int rightLimit;
     int hitCount;
+    int id;
+    vector<string> data;
 };
+string decToBin(int n)
+{
+    int i = 0;
+    string bin = "";
+    while (n > 0)
+    {
+        bin += to_string(n % 2);
+        n = n / 2;
+        i++;
+    }
+
+    int x = 12 - bin.size();
+    string zeros = "";
+    while (x > 0)
+    {
+        zeros += '0';
+        x--;
+    }
+
+    zeros = bin + zeros;
+    string rev = string(zeros.rbegin(), zeros.rend());
+    return rev;
+}
+// Convertir un número de binario a decimal.
+int binToInt(string &num)
+{
+    int result = 0;
+    int power = 1; // Inicializamos el valor de la potencia de 2
+    // Empezamos desde el último carácter de la cadena (el bit menos significativo)
+    for (int i = num.length() - 1; i >= 0; --i)
+    {
+        // Si el carácter es '1', agregamos 2 elevado a la potencia correspondiente
+        if (num[i] == '1')
+            result += power;
+        // Multiplicamos la potencia por 2 para pasar al siguiente bit
+        power *= 2;
+    }
+    return result;
+}
 
 class CacheSimulator
 {
@@ -36,6 +85,7 @@ private:
     vector<Block> memory;
     map<string, int> isHit;
     priority_queue<Pair, vector<Pair>, greater<Pair>> leastFrecuentlyUsed;
+    vector<string> DRAM;
     int totalHits;
 
 public:
@@ -46,26 +96,50 @@ public:
         currentState = nextState;
     }
 
-    void events(int memData)
+    void events(int memData, int blockId = -1)
     {
         switch (currentState)
         {
         case State::Initialize:
-            // Initialize cache memory
-            memory.clear();
-            isHit.clear();
-            leastFrecuentlyUsed = priority_queue<Pair, vector<Pair>, greater<Pair>>();
-            totalHits = 0;
-            transition(State::ReadAddress);
+            cout << "Initialize" << endl;
+            initialize(memData);
             break;
         case State::ReadAddress:
+            cout << "read address" << endl;
             readData(memData);
             break;
-        case State::CHECKING_HIT:
+        case State::CheckHit:
+            cout << "CheckHit" << endl;
             checkHit(memData);
             break;
-        case State::REPLACING_BLOCK:
-            replaceBlock(memData);
+        case State::ReadInstruction:
+            cout << "ReadInstruction" << endl;
+            checkHit(memData);
+            break;
+        case State::CheckMemorySize:
+            cout << "CheckMemorySize" << endl;
+            checkMemorySize(memData);
+            break;
+        case State::ApplyLFU:
+            // applyLFU(memData);
+            break;
+        case State::CheckCacheForDB:
+            cout << "CheckCacheForDB" << endl;
+            checkCacheForDB(memData);
+            break;
+        case State::UpdateRam:
+            updateRam(memData, blockId);
+            break;
+        case State::UpdateBlock:
+            // updateBlock(memData);
+            break;
+        case State::AddBlock:
+            cout << "AddBlock" << endl;
+            addBlock(memData);
+            break;
+        case State::ReturnCacheData:
+            cout << "ReturnCacheData" << endl;
+            // returnCacheData(memData);
             break;
         case State::PRINTING_RESULTS:
             printResults();
@@ -76,64 +150,125 @@ public:
         }
     }
 
+    void initialize(int memData)
+    {
+        string line;
+        ifstream RAM("DRAM.txt");
+        // Initialize cache memory
+        memory.clear();
+        isHit.clear();
+        leastFrecuentlyUsed = priority_queue<Pair, vector<Pair>, greater<Pair>>();
+        totalHits = 0;
+        transition(State::ReadAddress);
+        for (int n = 0; n < 3072; n++)
+        {
+            getline(RAM, line);
+            DRAM.push_back(line);
+        }
+        events(memData);
+    }
+
     void readData(int memData)
     {
-        if (memData <= 3072)
+        if (memData < 3072)
         {
-
-            transition(State::CHECKING_HIT);
+            transition(State::CheckHit);
+            events(memData);
         }
         else
-        {
-            // Transition to PRINTING_RESULTS state
-            transition(State::PRINTING_RESULTS);
-        }
+            printf("Dir > 3072\n");
     }
 
     void checkHit(int memData)
     {
-        // Check if block is present in cache
-        if (isHit.find(blockAddress) != isHit.end())
+        string memDataS, blockAdd;
+        memDataS = decToBin(memData);
+        blockAdd = memDataS.substr(0, 7);
+        // Hit
+        if (isHit.find(blockAdd) != isHit.end())
         {
             // Block is present (hit)
             totalHits++;
-            memory[isHit[blockAddress]].hitCount++;
+            memory[isHit[blockAdd]].hitCount++;
             // Transition to READING state
-            transition(State::READING);
+            transition(State::ReadInstruction);
         }
+        // Miss
         else
         {
-            // Block is not present (miss)
-            if (memory.size() < 64)
-            {
-                // Cache not full, add block
-                addBlock(memData);
-            }
-            else
-            {
-                // Cache full, replace block
-                transition(State::REPLACING_BLOCK);
-            }
+            transition(State::CheckMemorySize);
         }
+        events(memData);
+    }
+
+    void checkMemorySize(int memData)
+    {
+        if (memory.size() < 64)
+            transition(State::CheckCacheForDB);
+        else
+            transition(State::ApplyLFU);
+        events(memData);
     }
 
     void addBlock(int memData)
     {
         // Add block to cache memory
-        CacheEntry newEntry;
-        newEntry.blockAddress = "";
+        Block newBlock;
+        string memDataS, blockAdd, offset;
+
+        memDataS = decToBin(memData);
+        blockAdd = memDataS.substr(0, 7);
+        offset = memDataS.substr(7, 5); // Offset de 5 bits
+
+        newBlock.blockAddress = blockAdd;
+        newBlock.dirtyBit = false;
+        newBlock.validBit = true;
+        newBlock.leftLimit = memData - binToInt(offset);
+        newBlock.rightLimit = newBlock.leftLimit + 31;
+        newBlock.id = memory.size();
+
+        for (int i = 0; i < 32; i++)
+        {
+            newBlock.data.push_back(DRAM[i + newBlock.leftLimit]);
+            cout << DRAM[i + newBlock.leftLimit] << endl;
+        }
         // Initialize newEntry
-        memory.push_back(newEntry);
-        isHit[blockAddress] = memory.size() - 1;
-        // Transition to READING state
-        transition(State::READING);
+        memory.push_back(newBlock);
+        isHit[blockAdd] = newBlock.id;
+        // DE MOMENTO ACABA AQUÍIIIIIIIIIIIII
+        transition(State::FINISHED);
+        events(memData);
     }
 
-    void replaceBlock(int memData)
+    void checkCacheForDB(int memData)
     {
-        // Replace block in cache memory using LRU algorithm
-        // Transition to READING state
-        transition(State::READING);
+        bool flag = true;
+        int i = 0;
+        while (flag && i < memory.size())
+        {
+            if (memory[i].dirtyBit)
+                flag = false;
+            else
+                i++;
+        }
+        if (!flag)
+            transition(State::UpdateRam);
+        else
+            transition(State::AddBlock);
+        events(memData, i);
+    }
+
+    void updateRam(int memData, int id)
+    {
+        int pos = memory[id].leftLimit;
+        for (int i = 0; i < 32; i++)
+        {
+            DRAM[i + pos] = memory[id].data[i];
+        }
+        if (memory.size() < 64)
+            transition(State::AddBlock);
+        else
+            transition(State::AddBlock);
     }
 
     void printResults()
